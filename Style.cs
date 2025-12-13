@@ -107,7 +107,7 @@ namespace TankIconMaker
         ///     clients so that old styles can be loaded correctly.</summary>
         public bool Centerable = false;
         /// <summary>Atlas width; defaults to the value used in old clients so that old styles can be loaded correctly.</summary>
-        public int AtlasTextureWidth = 4096;
+        public int AtlasTextureWidth = 5120;
         /// <summary>Atlas height; defaults to the value used in old clients so that old styles can be loaded correctly.</summary>
         public int AtlasTextureHeight = 4512;
 

@@ -6,3 +6,6 @@ obj
 builds
 packages
 *.orig
+README.TXT
+*.vsidx
+.vs/TankIconMaker/v18/DocumentLayout.json
