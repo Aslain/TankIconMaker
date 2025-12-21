@@ -93,10 +93,7 @@ namespace TankIconMaker
             {
                 int res;
                 string append;
-                if (!text.Contains("{TankId}")
-                    && !text.Contains("{TankFullName}")
-                    && !text.Contains("{TankShortName}")
-                    && !text.Contains("{ShortImageName}"))
+                if (!text.Contains("{TankId}") && !text.Contains("{TankFullName}") && !text.Contains("{TankShortName}"))
                 {
                     res = DlgMessage.ShowQuestion(
                         App.Translation.PathTemplateWindow.WarnIconsPathIsFolder,

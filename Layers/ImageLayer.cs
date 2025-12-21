@@ -1,6 +1,5 @@
 ﻿using System;
 using System.IO;
-using System.Linq;
 using System.Text.RegularExpressions;
 using RT.Util;
 using RT.Util.Lingo;
@@ -19,19 +18,18 @@ namespace TankIconMaker.Layers
 
         private static string[] GetAllSeparatorVariants(string baseName)
         {
-            var parts = Regex.Split(baseName.ToLowerInvariant(), @"[-_]");
-            if (parts.Length <= 1) return new[] { baseName.ToLowerInvariant() };
+            var safe = (baseName ?? "").ToLowerInvariant();
+            var parts = Regex.Split(safe, "[-_]");
+            if (parts.Length <= 1)
+                return new[] { safe };
 
             var separators = new[] { '_', '-' };
             var variants = new System.Collections.Generic.List<string>();
-            
             for (int i = 0; i < (1 << (parts.Length - 1)); i++)
             {
                 var variant = parts[0];
                 for (int j = 0; j < parts.Length - 1; j++)
-                {
-                    variant += separators[i >> j & 1] + parts[j + 1];
-                }
+                    variant += separators[(i >> j) & 1] + parts[j + 1];
                 variants.Add(variant);
             }
             return variants.ToArray();
@@ -39,6 +37,9 @@ namespace TankIconMaker.Layers
 
         public override BitmapBase Draw(Tank tank)
         {
+            if (tank == null || tank.Context == null || tank.Context.Installation == null || tank.Context.VersionConfig == null)
+                return null;
+
             BitmapBase image;
             if (tank is TestTank)
             {
@@ -48,83 +49,140 @@ namespace TankIconMaker.Layers
             {
                 var installation = tank.Context.Installation;
                 var config = tank.Context.VersionConfig;
-                var guiPackage = config.GuiPackageName.Split(' ', ',', ';');
+                var guiPackage = (config.GuiPackageName ?? "")
+                    .Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                if (guiPackage.Length == 0)
+                    guiPackage = new[] { "" };
+
+                var fullImageName = (tank.ImageName ?? tank.TankId) + config.TankIconExtension;
+
                 switch (Style)
                 {
                     case ImageBuiltInStyle.Contour:
                         image = null;
                         foreach (string items in guiPackage)
                         {
+                            if (string.IsNullOrEmpty(config.PathSourceContour))
+                                continue;
+
                             image = ImageCache.GetImage(new CompositePath(
                                 tank.Context, installation.Path,
                                 config.PathSourceContour.Replace("\"GuiPackage\"", items),
-                                tank.ImageName + config.TankIconExtension));
+                                fullImageName));
                             if (image != null)
                                 break;
                         }
                         break;
+
                     case ImageBuiltInStyle.ThreeD:
                         image = null;
-                        var imageName3d = tank.ImageName ?? "";
-                        var dashIndex3d = imageName3d.IndexOf('-');
-                        if (dashIndex3d > 0)
-                            imageName3d = imageName3d.Substring(dashIndex3d + 1);
-                        
-                        var variants3d = GetAllSeparatorVariants(imageName3d);
                         foreach (string items in guiPackage)
                         {
-                            var folder3d = config.PathSource3D.Replace("\"GuiPackage\"", items);
-                            foreach (var variant in variants3d)
-                            {
-                                image = ImageCache.GetImage(new CompositePath(
-                                    tank.Context,
-                                    installation.Path,
-                                    folder3d,
-                                    variant + config.TankIconExtension));
-                                if (image != null)
-                                {
-                                    tank.Real3DImageName = variant;
-                                    Ut.SetReal3DImageName(tank.TankId, variant);
-                                    break;
-                                }
-                            }
-                            if (image != null) break;
+                            if (string.IsNullOrEmpty(config.PathSource3D))
+                                continue;
+
+                            image = ImageCache.GetImage(new CompositePath(
+                                tank.Context, installation.Path,
+                                config.PathSource3D.Replace("\"GuiPackage\"", items),
+                                fullImageName));
+                            if (image != null)
+                                break;
                         }
                         break;
+
                     case ImageBuiltInStyle.ThreeDLarge:
                         image = null;
-                        var imageName = tank.ImageName ?? "";
-                        var dashIndex = imageName.IndexOf('-');
-                        if (dashIndex > 0)
-                            imageName = imageName.Substring(dashIndex + 1);
-                        
-                        var variants = GetAllSeparatorVariants(imageName);
                         foreach (string items in guiPackage)
                         {
-                            var folder = config.PathSource3DLarge.Replace("\"GuiPackage\"", items);
-                            foreach (var variant in variants)
-                            {
-                                image = ImageCache.GetImage(new CompositePath(
-                                    tank.Context,
-                                    installation.Path,
-                                    folder,
-                                    variant + config.TankIconExtension));
-                                if (image != null)
-                                {
-                                    tank.Real3DImageName = variant;
-                                    Ut.SetReal3DImageName(tank.TankId, variant);
-                                    break;
-                                }
-                            }
-                            if (image != null) break;
+                            if (string.IsNullOrEmpty(config.PathSource3DLarge))
+                                continue;
+
+                            image = ImageCache.GetImage(new CompositePath(
+                                tank.Context, installation.Path,
+                                config.PathSource3DLarge.Replace("\"GuiPackage\"", items),
+                                fullImageName));
+                            if (image != null)
+                                break;
                         }
                         break;
+
+                    case ImageBuiltInStyle.ThreeDv2:
+                        image = null;
+                        {
+                            var shortName = tank.ImageName ?? tank.TankId ?? "";
+                            var dash = shortName.IndexOf('-');
+                            if (dash > 0)
+                                shortName = shortName.Substring(dash + 1);
+                            var variants = GetAllSeparatorVariants(shortName);
+
+                            foreach (string items in guiPackage)
+                            {
+                                var folder3d = (config.PathSource3Dv2 ?? "").Replace("\"GuiPackage\"", items);
+                                if (string.IsNullOrEmpty(folder3d))
+                                    continue;
+
+                                foreach (var variant in variants)
+                                {
+                                    image = ImageCache.GetImage(new CompositePath(
+                                        tank.Context,
+                                        installation.Path,
+                                        folder3d,
+                                        variant + config.TankIconExtension));
+                                    if (image != null)
+                                    {
+                                        Ut.SetReal3DImageName(tank.TankId, variant);
+                                        break;
+                                    }
+                                }
+                                if (image != null)
+                                    break;
+                            }
+                        }
+                        break;
+
+                    case ImageBuiltInStyle.ThreeDLargev2:
+                        image = null;
+                        {
+                            var shortName = tank.ImageName ?? tank.TankId ?? "";
+                            var dash = shortName.IndexOf('-');
+                            if (dash > 0)
+                                shortName = shortName.Substring(dash + 1);
+                            var variants = GetAllSeparatorVariants(shortName);
+
+                            foreach (string items in guiPackage)
+                            {
+                                var folder = (config.PathSource3DLargev2 ?? "").Replace("\"GuiPackage\"", items);
+                                if (string.IsNullOrEmpty(folder))
+                                    continue;
+
+                                foreach (var variant in variants)
+                                {
+                                    image = ImageCache.GetImage(new CompositePath(
+                                        tank.Context,
+                                        installation.Path,
+                                        folder,
+                                        variant + config.TankIconExtension));
+                                    if (image != null)
+                                    {
+                                        Ut.SetReal3DImageName(tank.TankId, variant);
+                                        break;
+                                    }
+                                }
+                                if (image != null)
+                                    break;
+                            }
+                        }
+                        break;
+
                     case ImageBuiltInStyle.Country:
                         if (tank.Country == Country.None)
                             return null;
                         image = null;
                         foreach (string items in guiPackage)
                         {
+                            if (config.PathSourceCountry == null || !config.PathSourceCountry.ContainsKey(tank.Country))
+                                continue;
+
                             image = ImageCache.GetImage(new CompositePath(
                                 tank.Context, installation.Path,
                                 config.PathSourceCountry[tank.Country].Replace("\"GuiPackage\"", items)));
@@ -132,12 +190,16 @@ namespace TankIconMaker.Layers
                                 break;
                         }
                         break;
+
                     case ImageBuiltInStyle.Class:
                         if (tank.Class == Class.None)
                             return null;
                         image = null;
                         foreach (string items in guiPackage)
                         {
+                            if (config.PathSourceClass == null || !config.PathSourceClass.ContainsKey(tank.Class))
+                                continue;
+
                             image = ImageCache.GetImage(new CompositePath(
                                 tank.Context, installation.Path,
                                 config.PathSourceClass[tank.Class].Replace("\"GuiPackage\"", items)));
@@ -145,6 +207,7 @@ namespace TankIconMaker.Layers
                                 break;
                         }
                         break;
+
                     default:
                         throw new Exception("9174876");
                 }
@@ -156,6 +219,7 @@ namespace TankIconMaker.Layers
                     tank.AddWarning(App.Translation.TankImageLayer.MissingImageWarning);
                 return null;
             }
+
             return image;
         }
     }
@@ -168,6 +232,9 @@ namespace TankIconMaker.Layers
 
         public override BitmapBase Draw(Tank tank)
         {
+            if (tank == null || tank.Context == null || tank.Context.Installation == null || tank.Context.VersionConfig == null)
+                return null;
+
             BitmapBase image;
             if (tank is TestTank)
             {
@@ -177,7 +244,10 @@ namespace TankIconMaker.Layers
             {
                 var installation = tank.Context.Installation;
                 var config = tank.Context.VersionConfig;
-                var guiPackage = config.GuiPackageName.Split(' ', ',', ';');
+                var guiPackage = (config.GuiPackageName ?? "")
+                    .Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                if (guiPackage.Length == 0)
+                    guiPackage = new[] { "" };
 
                 image = ImageCache.GetImage(new CompositePath(
                     tank.Context, installation.Path,
@@ -186,6 +256,9 @@ namespace TankIconMaker.Layers
 
                 foreach (string items in guiPackage)
                 {
+                    if (string.IsNullOrEmpty(config.PathSourceContour))
+                        continue;
+
                     image = image ?? ImageCache.GetImage(new CompositePath(
                         tank.Context, installation.Path,
                         config.PathSourceContour.Replace("\"GuiPackage\"", items),
@@ -200,6 +273,7 @@ namespace TankIconMaker.Layers
                 tank.AddWarning(App.Translation.CurrentImageLayer.MissingImageWarning);
                 return null;
             }
+
             return image;
         }
     }
@@ -227,6 +301,9 @@ namespace TankIconMaker.Layers
 
         public override BitmapBase Draw(Tank tank)
         {
+            if (tank == null || tank.Context == null || tank.Context.Installation == null || tank.Context.VersionConfig == null)
+                return null;
+
             var filename = ImageFile.GetValue(tank);
             if (string.IsNullOrWhiteSpace(filename))
                 return null;
@@ -243,12 +320,12 @@ namespace TankIconMaker.Layers
                     tank.Context,
                     tank.Context.Installation.Path,
                     filename));
-
             if (image == null)
             {
                 tank.AddWarning(App.Translation.CustomImageLayer.MissingImageWarning.Fmt(filename));
                 return null;
             }
+
             return image;
         }
     }
@@ -269,6 +346,9 @@ namespace TankIconMaker.Layers
 
         public override BitmapBase Draw(Tank tank)
         {
+            if (tank == null || tank.Context == null || tank.Context.Installation == null || tank.Context.VersionConfig == null)
+                return null;
+
             var filename = (Pattern ?? "")
                 .Replace("{tier}", tank.Tier.ToString())
                 .Replace("{country}", tank.Country.ToString().ToLower())
@@ -294,12 +374,12 @@ namespace TankIconMaker.Layers
                     tank.Context,
                     tank.Context.Installation.Path,
                     filename));
-
             if (image == null)
             {
                 tank.AddWarning(App.Translation.FilenamePatternImageLayer.MissingImageWarning.Fmt(filename));
                 return null;
             }
+
             return image;
         }
     }

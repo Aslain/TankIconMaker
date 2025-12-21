@@ -15,45 +15,31 @@ using RT.Util;
 using RT.Util.Dialogs;
 using RT.Util.ExtensionMethods;
 using RT.Util.Lingo;
+using TankIconMaker.Layers;
 using WotDataLib;
 
 namespace TankIconMaker
 {
     static partial class Ut
     {
-        private static readonly ConcurrentDictionary<string, string> _real3DImageNames = new ConcurrentDictionary<string, string>();
-		private static readonly int MAX_CACHE_SIZE = 3000;
-        
-        /// <summary>Save the actual 3D filename for the tank.</summary>
-		public static void SetReal3DImageName(string tankId, string realName)
-		{
-			if (!string.IsNullOrEmpty(tankId) && !string.IsNullOrEmpty(realName))
-			{
-				if (_real3DImageNames.Count >= MAX_CACHE_SIZE)
-				{
-					var keys = _real3DImageNames.Keys.Take(100).ToList();
-					foreach (var key in keys)
-					{
-						string removed;
-						_real3DImageNames.TryRemove(key, out removed);
-					}
-				}
-				_real3DImageNames[tankId] = realName;
-			}
-		}
+        private static readonly ConcurrentDictionary<string, string> _real3DImageNames =
+            new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        /// <summary>Get the actual 3D filename for the tank.</summary>
+        public static void SetReal3DImageName(string tankId, string realBaseName)
+        {
+            if (string.IsNullOrEmpty(tankId) || string.IsNullOrEmpty(realBaseName))
+                return;
+            _real3DImageNames[tankId] = realBaseName;
+        }
+
         public static string GetReal3DImageName(string tankId)
         {
             if (string.IsNullOrEmpty(tankId))
                 return null;
-            
-            string result;
-            _real3DImageNames.TryGetValue(tankId, out result);
-            return result;
+            string value;
+            return _real3DImageNames.TryGetValue(tankId, out value) ? value : null;
         }
 
-        /// <summary>Clear the 3D filename dictionary.</summary>
         public static void ClearReal3DImageNames()
         {
             _real3DImageNames.Clear();
@@ -441,23 +427,49 @@ namespace TankIconMaker
             return path;
         }
 
-        private static string GetShortImageName(string tankId)
-        {
-            if (string.IsNullOrEmpty(tankId))
-                return "none";
-
-            var name = tankId;
-
-            var dashIndex = name.IndexOf('-');
-            if (dashIndex > 0)
-                name = name.Substring(dashIndex + 1);
-
-            name = name.Replace('-', '_');
-            return name.ToLowerInvariant();
-        }
-
         /// <summary>Expands a Tank Icon Maker-style path, which may have expandable tokens like "VersionName".</summary>
-        public static string ExpandIconPath(string path, WotContext context, Style style, WotTank tank,
+		public static string ExpandIconPath(string path, WotContext context, Style style, WotTank tank,
+			bool fragment = false, SaveType saveType = SaveType.Icons)
+		{
+			System.Diagnostics.Debug.WriteLine($"DEBUG ExpandIconPath START: style={style.Name}, tank={tank?.TankId}");
+
+			var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
+			var is3Dv2 = tankImageLayer != null &&
+				(tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
+				 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLarge ||
+				 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
+
+			System.Diagnostics.Debug.WriteLine($"DEBUG ExpandIconPath: is3Dv2={is3Dv2}, layer={tankImageLayer?.Style}");
+
+			if (is3Dv2 && tank != null)
+			{
+				System.Diagnostics.Debug.WriteLine($"DEBUG → 3D v2 logic for {tank.TankId}");
+				return ExpandIconPath3Dv2(path, context, style, tank, fragment, saveType);
+			}
+
+			if (tank != null)
+			{
+				var country = tank.Country;
+				var class_ = tank.Class;
+				var tankId = tank.TankId;
+				var fullName = tank.ClientData != null ? tank.ClientData.FullName : tank.TankId;
+				var shortName = tank.ClientData != null ? tank.ClientData.ShortName : tank.TankId;
+				var tier = tank.Tier;
+				return ExpandIconPath(path, context, style,
+					country.Pick("ussr", "germany", "usa", "france", "china", "uk", "japan", "czech", "sweden", "poland", "italy", "intunion", "none"),
+					class_.Pick("light", "medium", "heavy", "destroyer", "artillery", "none"), tankId, fullName,
+					shortName, tier, fragment, saveType);
+			}
+			else
+			{
+				return ExpandIconPath(path, context, style, "none", "none", "none", "none", "none", 0, fragment, saveType);
+			}
+		}
+	
+		/// <summary>
+		/// 3D version v2 based on a real 3D name.
+		/// </summary>
+        public static string ExpandIconPath3Dv2(string path, WotContext context, Style style, WotTank tank,
             bool fragment = false, SaveType saveType = SaveType.Icons)
         {
             if (tank != null)
@@ -468,27 +480,71 @@ namespace TankIconMaker
                 var fullName = tank.ClientData != null ? tank.ClientData.FullName : tank.TankId;
                 var shortName = tank.ClientData != null ? tank.ClientData.ShortName : tank.TankId;
                 var tier = tank.Tier;
-                
-                // Use the actual 3D name if it exists (from the object or dictionary), otherwise the standard one
-                var shortImageName = !string.IsNullOrEmpty(tank.Real3DImageName) 
-                    ? tank.Real3DImageName.ToLowerInvariant() 
-                    : (!string.IsNullOrEmpty(GetReal3DImageName(tankId)) 
-                        ? GetReal3DImageName(tankId).ToLowerInvariant()
-                        : GetShortImageName(tankId));
-                
-                return ExpandIconPath(path, context, style,
+                var shortImageName = GetShortImageName(tank);
+                return ExpandIconPath3Dv2(path, context, style,
                     country.Pick("ussr", "germany", "usa", "france", "china", "uk", "japan", "czech", "sweden", "poland", "italy", "intunion", "none"),
-                    class_.Pick("light", "medium", "heavy", "destroyer", "artillery", "none"), tankId, fullName,
-                    shortName, tier,
-                    shortImageName,
+                    class_.Pick("light", "medium", "heavy", "destroyer", "artillery", "none"),
+                    tankId, fullName, shortName, shortImageName, tier,
                     fragment, saveType);
             }
             else
             {
-                return ExpandIconPath(path, context, style, "none", "none", "none", "none", "none", 0, "none", fragment, saveType);
+                return ExpandIconPath3Dv2(path, context, style,
+                    "none", "none", "none", "none", "none", null, 0, fragment, saveType);
             }
         }
 
+		private static string ExpandIconPath3Dv2(string path, WotContext context, Style style, string country, string class_, string tankId, string tankFullName, string tankShortName, string shortImageName, int tankTier, bool fragment, SaveType saveType)
+		{
+			System.Diagnostics.Debug.WriteLine($"DEBUG 3Dv2 PRIVATE: tankId='{tankId}', shortImageName='{shortImageName}'");
+
+			if (string.IsNullOrEmpty(path))
+			{
+				switch (saveType)
+				{
+					case SaveType.Icons: path = "{IconsPath}{TankId}{Ext}"; break;
+					case SaveType.BattleAtlas: path = "{AtlasPath}" + AtlasBuilder.battleAtlas + ".png"; break;
+					case SaveType.VehicleMarkerAtlas: path = "{AtlasPath}" + AtlasBuilder.vehicleMarkerAtlas + ".png"; break;
+					case SaveType.CustomAtlas: path = "{AtlasPath}" + AtlasBuilder.customAtlas + ".png"; break;
+					default: throw new ArgumentOutOfRangeException(nameof(saveType));
+				}
+			}
+
+			path = path.Replace("{IconsPath}", Ut.ExpandPath(context, context.VersionConfig.PathDestination));
+			path = path.Replace("{AtlasPath}", Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas));
+			path = path.Replace("{TimPath}", PathUtil.AppPath);
+			path = path.Replace("{GamePath}", context.Installation.Path);
+			path = path.Replace("{GameVersion}", context.Installation.GameVersionName);
+
+			if (class_ != null) path = path.Replace("{TankClass}", class_);
+			if (country != null) path = path.Replace("{TankCountry}", country);
+			
+			if (!string.IsNullOrEmpty(shortImageName))
+			{
+				path = path.Replace("{TankId}", shortImageName.ToLowerInvariant());
+				System.Diagnostics.Debug.WriteLine($"DEBUG 3Dv2: USED shortImageName='{shortImageName.ToLowerInvariant()}'");
+			}
+			else
+			{
+				path = path.Replace("{TankId}", tankId);
+				System.Diagnostics.Debug.WriteLine($"DEBUG 3Dv2: USED tankId='{tankId}' (brak shortImageName)");
+			}
+			
+			if (tankFullName != null) path = path.Replace("{TankFullName}", tankFullName);
+			if (tankShortName != null) path = path.Replace("{TankShortName}", tankShortName);
+			path = path.Replace("{TankTier}", tankTier.ToString());
+			path = path.Replace("{StyleName}", style.Name);
+			path = path.Replace("{StyleAuthor}", style.Author);
+			path = path.Replace("{Ext}", context.VersionConfig.TankIconExtension);
+
+			path = Environment.ExpandEnvironmentVariables(path);
+			path = path.Replace('\\', '/').Replace('/', '\\');
+
+			if (path.EndsWith("\\") && !path.EndsWith(":\\"))
+				path = path.Substring(0, path.Length - 1);
+
+			return fragment ? path : Path.GetFullPath(Path.Combine(context.Installation.Path, path));
+		}
         /// <summary>Expands a Tank Icon Maker-style path, which may have expandable tokens like "VersionName".</summary>
         public static string ExpandIconPath(string path, WotContext context, Style style, Country country,
             Class class_, bool fragment = false, SaveType saveType = SaveType.Icons)
@@ -502,13 +558,12 @@ namespace TankIconMaker
         public static string ExpandIconPath(string path, WotContext context, Style style, string country, string class_,
             bool fragment = false, SaveType saveType = SaveType.Icons)
         {
-            return ExpandIconPath(path, context, style, country, class_, null, null, null, 0, null, fragment, saveType);
+            return ExpandIconPath(path, context, style, country, class_, null, null, null, 0, fragment, saveType);
         }
 
         /// <summary>Expands a Tank Icon Maker-style path, which may have expandable tokens like "VersionName".</summary>
         public static string ExpandIconPath(string path, WotContext context, Style style, string country, string class_,
-            string tankId, string tankFullName, string tankShortName, int tankTier, string shortImageName,
-            bool fragment = false, SaveType saveType = SaveType.Icons)
+            string tankId, string tankFullName, string tankShortName, int tankTier, bool fragment = false, SaveType saveType = SaveType.Icons)
         {
             if (string.IsNullOrEmpty(path))
             {
@@ -547,24 +602,6 @@ namespace TankIconMaker
             if (tankId != null)
             {
                 path = path.Replace("{TankId}", tankId);
-            }
-
-            if (shortImageName != null)
-            {
-                path = path.Replace("{ShortImageName}", shortImageName);
-            }
-            else if (tankId != null)
-            {
-                // If shortImageName is not provided but we have tankId, try using Real3DImageName from dictionary
-                var real3DName = GetReal3DImageName(tankId);
-                if (!string.IsNullOrEmpty(real3DName))
-                {
-                    path = path.Replace("{ShortImageName}", real3DName.ToLowerInvariant());
-                }
-                else
-                {
-                    path = path.Replace("{ShortImageName}", GetShortImageName(tankId));
-                }
             }
 
             if (tankFullName != null)
@@ -653,6 +690,27 @@ namespace TankIconMaker
             }
             return errorInfo.ToString();
         }
+		
+		/// <summary>
+		/// ShortImageName for 3D v2 – uses the remembered real 3D name or ClientData.Real3DImageName,
+		/// followed by a shortened TankId/ImageName.
+		/// </summary>
+		private static string GetShortImageName(WotTank tank)
+		{
+			if (tank == null)
+				return null;
+
+			var real = GetReal3DImageName(tank.TankId);
+			if (!string.IsNullOrEmpty(real))
+				return real;
+
+			var imageName = tank.ImageName ?? tank.TankId;
+			var dashIndex = imageName.IndexOf('-');
+			if (dashIndex > 0)
+				imageName = imageName.Substring(dashIndex + 1);
+			return imageName;
+		}
+			
     }
 
     /// <summary>

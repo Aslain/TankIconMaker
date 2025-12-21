@@ -59,7 +59,7 @@ namespace TankIconMaker
 		
 		/// Limit rendering parallelism (Magick.NET, effects, etc.)
 		private static readonly System.Threading.SemaphoreSlim _renderSemaphore =
-			new System.Threading.SemaphoreSlim(12, 12); // parallel renders
+			new System.Threading.SemaphoreSlim(12, 24); // parallel renders
 
         /// <summary>
         /// Shows a message in large letters in an overlay in the middle of the window. Must be called on the UI thread
@@ -1191,7 +1191,6 @@ namespace TankIconMaker
             }
         }
 
-
         private Task saveIcons(string pathTemplate)
         {
             var context = CurContext;
@@ -1243,6 +1242,58 @@ namespace TankIconMaker
                 return null;
             }
         }
+		
+		private Task saveIcons3Dv2(string pathTemplate)
+		{
+			var context = CurContext;
+			var style = App.Settings.ActiveStyle; // capture it in case the user selects a different one while the background task is running
+
+			try
+			{
+				var renderTasks = ListRenderTasks(context, style, all: true);
+				var renders = _renderResults.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+				// The rest of the save process occurs off the GUI thread, while this method returns.
+				return Task.Factory.StartNew(() =>
+				{
+					try
+					{
+						foreach (var renderTask in renderTasks)
+							if (!renders.ContainsKey(renderTask.TankId))
+							{
+								renders[renderTask.TankId] = renderTask;
+								renderTask.Render();
+							}
+						foreach (var renderTask in renderTasks)
+						{
+							var render = renders[renderTask.TankId];
+							if (render.Exception == null && !render.isEmpty)
+							{
+								var path = Ut.ExpandIconPath3Dv2(pathTemplate, context, style, renderTask.Tank);
+								path = Ut.GetSafeFilename(path);
+								Directory.CreateDirectory(Path.GetDirectoryName(path));
+								Ut.SaveImage(render.Image, path, context.VersionConfig.TankIconExtension);
+							}
+						}
+					}
+					finally
+					{
+						Dispatcher.Invoke((Action)(() =>
+						{
+							// Cache any new renders that we don't already have
+							foreach (var kvp in renders)
+								if (!_renderResults.ContainsKey(kvp.Key))
+									_renderResults[kvp.Key] = kvp.Value;
+						}));
+					}
+				});
+			}
+			catch (Exception e)
+			{
+				DlgMessage.ShowError(App.Translation.Prompt.IconsSaveError.Fmt(e.Message));
+				return null;
+			}
+		}
 
 		private void bulkSaveIcons(IEnumerable<Style> stylesToSave, string overridePathTemplate = null)
 		{
@@ -1256,9 +1307,10 @@ namespace TankIconMaker
 
 			foreach (var styleF in stylesToSave)
 			{
-				var style = styleF; // foreach variable scope fix
+				var style = styleF;
 
-				if (!style.IconsBulkSaveEnabled && !style.BattleAtlasBulkSaveEnabled && !style.VehicleMarkersAtlasBulkSaveEnabled && !style.CustomAtlasBulkSaveEnabled)
+				if (!style.IconsBulkSaveEnabled && !style.BattleAtlasBulkSaveEnabled && 
+					!style.VehicleMarkersAtlasBulkSaveEnabled && !style.CustomAtlasBulkSaveEnabled)
 				{
 					continue;
 				}
@@ -1266,6 +1318,7 @@ namespace TankIconMaker
 				var styleActions = new List<Action>();
 				var styleTasks = new List<Task>();
 				var renderTasks = ListRenderTasks(context, style, true);
+				
 				var overrideIconsPath = overridePathTemplate == null
 					? null
 					: Ut.AppendExpandableFilename(
@@ -1274,26 +1327,25 @@ namespace TankIconMaker
 
 				foreach (var renderTaskF in renderTasks)
 				{
-					var renderTask = renderTaskF; // foreach variable scope fix
+					var renderTask = renderTaskF;
 					styleActions.Add(() =>
 					{
-						_renderSemaphore.Wait();
 						try
 						{
 							var path = Ut.ExpandIconPath(overrideIconsPath ?? style.PathTemplate, context, style, renderTask.Tank);
+							
 							path = Ut.GetSafeFilename(path);
-
 							renderTask.Render();
-
+							
 							if (style.IconsBulkSaveEnabled && !renderTask.isEmpty)
 							{
 								Directory.CreateDirectory(Path.GetDirectoryName(path));
 								Ut.SaveImage(renderTask.Image, path, context.VersionConfig.TankIconExtension);
 							}
 						}
-						finally
+						catch (Exception ex)
 						{
-							_renderSemaphore.Release();
+							System.Diagnostics.Debug.WriteLine($"Bulk save error: {ex.Message}");
 						}
 					});
 				}
@@ -1307,20 +1359,14 @@ namespace TankIconMaker
 				var atlasTask = Task.Factory.ContinueWhenAll(styleTasks.ToArray(), renders =>
 				{
 					var atlasPath = Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas);
-
 					var localAtlasBuilder = new AtlasBuilder(context);
 
 					if (style.BattleAtlasBulkSaveEnabled)
 					{
 						var path = Ut.ExpandIconPath(
-							overridePathTemplate == null
-								? style.BattleAtlasPathTemplate
-								: Ut.AppendExpandableFilename(Path.Combine(overridePathTemplate, atlasPath), SaveType.BattleAtlas),
-							context,
-							style,
-							null,
-							null,
-							saveType: SaveType.BattleAtlas);
+							overridePathTemplate == null ? style.BattleAtlasPathTemplate :
+							Ut.AppendExpandableFilename(Path.Combine(overridePathTemplate, atlasPath), SaveType.BattleAtlas), 
+							context, style, null, null, false, saveType: SaveType.BattleAtlas);
 						path = Ut.GetSafeFilename(path);
 						localAtlasBuilder.SaveAtlas(path, SaveType.BattleAtlas, renderTasks);
 					}
@@ -1328,14 +1374,9 @@ namespace TankIconMaker
 					if (style.VehicleMarkersAtlasBulkSaveEnabled)
 					{
 						var path = Ut.ExpandIconPath(
-							overridePathTemplate == null
-								? style.VehicleMarkersAtlasPathTemplate
-								: Ut.AppendExpandableFilename(Path.Combine(overridePathTemplate, atlasPath), SaveType.VehicleMarkerAtlas),
-							context,
-							style,
-							null,
-							null,
-							saveType: SaveType.VehicleMarkerAtlas);
+							overridePathTemplate == null ? style.VehicleMarkersAtlasPathTemplate :
+							Ut.AppendExpandableFilename(Path.Combine(overridePathTemplate, atlasPath), SaveType.VehicleMarkerAtlas), 
+							context, style, null, null, false, saveType: SaveType.VehicleMarkerAtlas);
 						path = Ut.GetSafeFilename(path);
 						localAtlasBuilder.SaveAtlas(path, SaveType.VehicleMarkerAtlas, renderTasks);
 					}
@@ -1343,14 +1384,9 @@ namespace TankIconMaker
 					if (style.CustomAtlasBulkSaveEnabled)
 					{
 						var path = Ut.ExpandIconPath(
-							overridePathTemplate == null
-								? style.CustomAtlasPathTemplate
-								: Ut.AppendExpandableFilename(Path.Combine(overridePathTemplate, atlasPath), SaveType.CustomAtlas),
-							context,
-							style,
-							null,
-							null,
-							saveType: SaveType.CustomAtlas);
+							overridePathTemplate == null ? style.CustomAtlasPathTemplate :
+							Ut.AppendExpandableFilename(Path.Combine(overridePathTemplate, atlasPath), SaveType.CustomAtlas), 
+							context, style, null, null, false, saveType: SaveType.CustomAtlas);
 						path = Ut.GetSafeFilename(path);
 						localAtlasBuilder.SaveAtlas(path, SaveType.CustomAtlas, renderTasks);
 					}
@@ -1359,12 +1395,9 @@ namespace TankIconMaker
 					if ((DateTime.UtcNow - lastGuiUpdate).TotalMilliseconds > 50)
 					{
 						lastGuiUpdate = DateTime.UtcNow;
-						Dispatcher.Invoke(
-							new Action(
-								() =>
-									GlobalStatusShow(App.Translation.Prompt.BulkSave_Progress +
-														"\n{0:0}%".Fmt(100 -
-																	tasksRemaining / (double)stylesCount * 100))));
+						Dispatcher.Invoke(new Action(() =>
+							GlobalStatusShow(App.Translation.Prompt.BulkSave_Progress +
+											 "\n{0:0}%".Fmt(100 - tasksRemaining / (double)stylesCount * 100))));
 					}
 				});
 				tasks.Add(atlasTask);
@@ -1380,7 +1413,8 @@ namespace TankIconMaker
 				}));
 			});
 		}
-        private void ctSave_Click(object _, RoutedEventArgs __)
+		
+         private void ctSave_Click(object _, RoutedEventArgs __)
         {
             GlobalStatusShow(App.Translation.Misc.GlobalStatus_Saving);
             var style = App.Settings.ActiveStyle;
@@ -1389,10 +1423,21 @@ namespace TankIconMaker
                 battleAtlasPath = "-",
                 vehicleMarkersAtlas = "-",
                 customAtlas = "-";
+
+            var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
+            var is3Dv2 =
+                tankImageLayer != null &&
+                (tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
+                 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
+
             if (App.Settings.ActiveStyle.IconsBulkSaveEnabled)
             {
-                savingTasks.Add(saveIcons(App.Settings.ActiveStyle.PathTemplate));
-                iconsPath = Ut.ExpandIconPath("", CurContext, style, null, null);
+                var iconsTask = is3Dv2
+                    ? saveIcons3Dv2(App.Settings.ActiveStyle.PathTemplate)
+                    : saveIcons(App.Settings.ActiveStyle.PathTemplate);
+
+                savingTasks.Add(iconsTask);
+                iconsPath = Ut.ExpandIconPath(App.Settings.ActiveStyle.PathTemplate, CurContext, style, null, null);
             }
 
             if (App.Settings.ActiveStyle.BattleAtlasBulkSaveEnabled)
@@ -1425,7 +1470,6 @@ namespace TankIconMaker
                 {
                     GlobalStatusHide();
 
-                    // Inform the user of what happened
                     if (tasks.All(x => x.Status == TaskStatus.RanToCompletion))
                     {
                         var renders = _renderResults.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
@@ -1468,9 +1512,18 @@ namespace TankIconMaker
         {
             GlobalStatusShow(App.Translation.Misc.GlobalStatus_Saving);
             var style = App.Settings.ActiveStyle;
+
+            var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
+            var is3Dv2 =
+                tankImageLayer != null &&
+                (tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
+                 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
+
+            Task iconsTask = is3Dv2 ? saveIcons3Dv2("") : saveIcons("");
+
             var savingTasks = new Task[]
             {
-                saveIcons(""),
+                iconsTask,
                 saveToAtlas("", SaveType.BattleAtlas),
                 saveToAtlas("", SaveType.VehicleMarkerAtlas)
             };
@@ -1490,7 +1543,6 @@ namespace TankIconMaker
                 {
                     GlobalStatusHide();
 
-                    // Inform the user of what happened
                     if (tasks.All(x => x.Status == TaskStatus.RanToCompletion))
                     {
                         var renders = _renderResults.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
@@ -1525,17 +1577,25 @@ namespace TankIconMaker
         {
             var style = App.Settings.ActiveStyle;
             var dlg = new VistaFolderBrowserDialog();
-            dlg.ShowNewFolderButton = true; // argh, the dialog requires the path to exist
+            dlg.ShowNewFolderButton = true;
             if (App.Settings.SaveToFolderPath != null && Directory.Exists(App.Settings.SaveToFolderPath))
                 dlg.SelectedPath = App.Settings.SaveToFolderPath;
             if (dlg.ShowDialog() != true)
                 return;
-            _overwriteAccepted.Remove(dlg.SelectedPath); // force the prompt
+            _overwriteAccepted.Remove(dlg.SelectedPath);
             App.Settings.SaveToFolderPath = dlg.SelectedPath;
             SaveSettings();
             GlobalStatusShow(App.Translation.Misc.GlobalStatus_Saving);
+
             var pathTemplate = Ut.AppendExpandableFilename(App.Settings.SaveToFolderPath, SaveType.Icons);
-            var task = saveIcons(pathTemplate);
+
+            var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
+            var is3Dv2 =
+                tankImageLayer != null &&
+                (tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
+                 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
+
+            Task task = is3Dv2 ? saveIcons3Dv2(pathTemplate) : saveIcons(pathTemplate);
             if (task == null)
             {
                 GlobalStatusHide();
@@ -1760,21 +1820,26 @@ namespace TankIconMaker
             });
         }
 
-        private List<Style> getBulkSaveStyles(string overridePathTemplate = null)
-        {
-            var context = CurContext;
-            var allStyles = App.Settings.Styles
-                .Select(style => new CheckListItem<Style>
-                {
-                    Item = style,
-                    Column1 = string.Format("{0} ({1})", style.Name, style.Author),
-                    Column2 = Ut.ExpandIconPath(overridePathTemplate ?? style.PathTemplate, context, style, null, null),
-                    IsChecked = style == App.Settings.ActiveStyle ? true : false
-                })
-                .ToList();
-            var tr = App.Translation.Prompt;
-            return CheckListWindow.ShowCheckList(this, allStyles, tr.BulkSave_Prompt, tr.BulkSave_Yes, new string[] { tr.BulkStyles_ColumnTitle, tr.BulkStyles_PathColumn }).ToList();
-        }
+		private List<Style> getBulkSaveStyles(string overridePathTemplate = null)
+		{
+			var context = CurContext;
+			var allStyles = App.Settings.Styles
+				.Select(style => {
+					var path = overridePathTemplate ?? style.PathTemplate;
+					var expandedPath = Ut.ExpandIconPath(path, context, style, null);
+						
+					return new CheckListItem<Style>
+					{
+						Item = style,
+						Column1 = string.Format("{0} ({1})", style.Name, style.Author),
+						Column2 = expandedPath,
+						IsChecked = style == App.Settings.ActiveStyle
+					};
+				})
+				.ToList();
+			var tr = App.Translation.Prompt;
+			return CheckListWindow.ShowCheckList(this, allStyles, tr.BulkSave_Prompt, tr.BulkSave_Yes, new string[] { tr.BulkStyles_ColumnTitle, tr.BulkStyles_PathColumn }).ToList();
+		}
 
         private void ctBulkSaveIcons_Click(object sender, RoutedEventArgs e)
         {
@@ -2783,7 +2848,7 @@ namespace TankIconMaker
             dc.PushTransform(new ScaleTransform(0.83, 0.83)); dc.PushTransform(new TranslateTransform(0, 3)); dc.DrawGeometry(Brushes.Red, null, _triangle); dc.Pop(); dc.Pop();
             dc.PushTransform(new ScaleTransform(0.5, 0.5)); dc.PushTransform(new TranslateTransform(0, 16)); dc.DrawGeometry(Brushes.White, null, _triangle); dc.Pop(); dc.Pop();
 
-            var exclamation = new FormattedText("!", System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface("Arial Black"), 55, Brushes.Black, VisualTreeHelper.GetDpi(this).PixelsPerDip);
+            var exclamation = new FormattedText("!", System.Globalization.CultureInfo.CurrentCulture, FlowDirection.LeftToRight, new Typeface("Arial Black"), 55, Brushes.Black, 1.0);
             dc.DrawText(exclamation, new Point(-exclamation.Width / 2, 11 - exclamation.Height / 2));
 
             dc.Pop(); dc.Pop();
