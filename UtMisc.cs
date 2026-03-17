@@ -708,7 +708,7 @@ namespace TankIconMaker
 			var dashIndex = imageName.IndexOf('-');
 			if (dashIndex > 0)
 				imageName = imageName.Substring(dashIndex + 1);
-			return imageName;
+			return imageName.Replace('-', '_');
 		}
 			
     }
