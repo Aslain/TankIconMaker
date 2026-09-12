@@ -1252,7 +1252,7 @@ namespace TankIconMaker
                                 renders[renderTask.TankId] = renderTask;
                                 renderTask.Render();
                             }
-                        var atlasBuilder = new AtlasBuilder(context);
+                        var atlasBuilder = new AtlasBuilder(context, style);
                         atlasBuilder.SaveAtlas(path, atlasType, renders.Values);
                     }
                     finally
@@ -1336,7 +1336,8 @@ namespace TankIconMaker
             var context = CurContext;
             var stylesCount = stylesToSave.Count();
             int tasksRemaining = stylesCount;
-            var atlasBuilder = new AtlasBuilder(context);
+            // Collected quietly and reported once at the end: a message per failed icon would mean hundreds of dialogs
+            var failures = new ConcurrentQueue<string>();
             foreach (var styleF in stylesToSave)
             {
                 var style = styleF; // foreach variable scope fix
@@ -1371,8 +1372,9 @@ namespace TankIconMaker
                                 Ut.SaveImage(renderTask.Image, path, context.VersionConfig.TankIconExtension);
                             }
                         }
-                        finally
+                        catch (Exception ex)
                         {
+                            failures.Enqueue("{0} ({1}): {2}: {3}".Fmt(style.Name, style.Author, renderTask.TankId, ex.Message));
                         }
                     });
                 }
@@ -1386,6 +1388,9 @@ namespace TankIconMaker
                 var atlasTask = Task.Factory.ContinueWhenAll(styleTasks.ToArray(), renders =>
                 {
                     var atlasPath = Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas);
+                    var atlasBuilder = new AtlasBuilder(context, style);
+                    try
+                    {
                     if (style.BattleAtlasBulkSaveEnabled)
                     {
                         var path = Ut.ExpandIconPath(overridePathTemplate == null ? style.BattleAtlasPathTemplate:
@@ -1416,6 +1421,11 @@ namespace TankIconMaker
                         path = Ut.GetSafeFilename(path);
                         atlasBuilder.SaveAtlas(path, SaveType.CustomAtlas, renderTasks);
                     }
+                    }
+                    catch (Exception ex)
+                    {
+                        failures.Enqueue("{0} ({1}): {2}".Fmt(style.Name, style.Author, ex.Message));
+                    }
 
                     Interlocked.Decrement(ref tasksRemaining);
                     if ((DateTime.UtcNow - lastGuiUpdate).TotalMilliseconds > 50)
@@ -1438,12 +1448,32 @@ namespace TankIconMaker
                     _rendering.Value = false;
                     GlobalStatusHide();
                     GC.Collect();
+                    reportBulkSaveFailures(failures);
                 }));
             });
         }
 
+        /// <summary>
+        ///     Reports everything that failed during a bulk save in a single message, never one per icon, and writes the full
+        ///     list to a file next to the program.
+        /// </summary>
+        private void reportBulkSaveFailures(ConcurrentQueue<string> failures)
+        {
+            var all = failures.ToArray();
+            if (all.Length == 0)
+                return;
+            string logPath = PathUtil.AppPathCombine("BulkSaveErrors.txt");
+            try { File.WriteAllLines(logPath, all); }
+            catch { logPath = null; }
+            DlgMessage.ShowWarning(App.Translation.Prompt.BulkSave_Failures.Fmt(all.Length, string.Join("\n", all.Take(10)))
+                + (logPath == null ? "" : "\n\n" + logPath));
+        }
+
         private void ctSave_Click(object _, RoutedEventArgs __)
         {
+            if (!confirmMissingFonts(new[] { App.Settings.ActiveStyle }))
+                return;
+
             GlobalStatusShow(App.Translation.Misc.GlobalStatus_Saving);
             var style = App.Settings.ActiveStyle;
             var savingTasks = new List<Task>();
