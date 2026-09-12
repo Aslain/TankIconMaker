@@ -668,6 +668,8 @@ namespace TankIconMaker
             var img = new TankImageControl
             {
                 SnapsToDevicePixels = true,
+                // Without this the icon lands between screen pixels at a Windows scaling of 125% and the preview looks distorted
+                UseLayoutRounding = true,
                 Margin = new Thickness { Right = 15 },
                 Cursor = Cursors.Hand,
                 Opacity = 0.7,
@@ -1252,7 +1254,7 @@ namespace TankIconMaker
                                 renders[renderTask.TankId] = renderTask;
                                 renderTask.Render();
                             }
-                        var atlasBuilder = new AtlasBuilder(context);
+                        var atlasBuilder = new AtlasBuilder(context, style);
                         atlasBuilder.SaveAtlas(path, atlasType, renders.Values);
                     }
                     finally
@@ -1390,7 +1392,7 @@ namespace TankIconMaker
 				var atlasTask = Task.Factory.ContinueWhenAll(styleTasks.ToArray(), renders =>
 				{
 					var atlasPath = Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas);
-					var localAtlasBuilder = new AtlasBuilder(context);
+					var localAtlasBuilder = new AtlasBuilder(context, style);
 
 					try
 					{
