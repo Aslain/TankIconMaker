@@ -284,12 +284,12 @@ namespace TankIconMaker.Layers
         public override string TypeName { get { return App.Translation.CustomImageLayer.LayerName; } }
         public override string TypeDescription { get { return App.Translation.CustomImageLayer.LayerDescription; } }
 
-        public ValueSelector<string> ImageFile { get; set; }
+        public ValueSelector<Filename> ImageFile { get; set; }
         public static MemberTr ImageFileTr(Translation tr) { return new MemberTr(tr.Category.Image, tr.CustomImageLayer.ImageFile); }
 
         public CustomImageLayer()
         {
-            ImageFile = new ValueSelector<string>("");
+            ImageFile = new ValueSelector<Filename>("");
         }
 
         public override LayerBase Clone()
