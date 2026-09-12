@@ -431,19 +431,14 @@ namespace TankIconMaker
 		public static string ExpandIconPath(string path, WotContext context, Style style, WotTank tank,
 			bool fragment = false, SaveType saveType = SaveType.Icons)
 		{
-			System.Diagnostics.Debug.WriteLine($"DEBUG ExpandIconPath START: style={style.Name}, tank={tank?.TankId}");
 
 			var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
 			var is3Dv2 = tankImageLayer != null &&
 				(tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
-				 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLarge ||
 				 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
-
-			System.Diagnostics.Debug.WriteLine($"DEBUG ExpandIconPath: is3Dv2={is3Dv2}, layer={tankImageLayer?.Style}");
 
 			if (is3Dv2 && tank != null)
 			{
-				System.Diagnostics.Debug.WriteLine($"DEBUG → 3D v2 logic for {tank.TankId}");
 				return ExpandIconPath3Dv2(path, context, style, tank, fragment, saveType);
 			}
 
@@ -496,24 +491,23 @@ namespace TankIconMaker
 
 		private static string ExpandIconPath3Dv2(string path, WotContext context, Style style, string country, string class_, string tankId, string tankFullName, string tankShortName, string shortImageName, int tankTier, bool fragment, SaveType saveType)
 		{
-			System.Diagnostics.Debug.WriteLine($"DEBUG 3Dv2 PRIVATE: tankId='{tankId}', shortImageName='{shortImageName}'");
 
 			if (string.IsNullOrEmpty(path))
 			{
 				switch (saveType)
 				{
-					case SaveType.Icons: path = "{IconsPath}{TankId}{Ext}"; break;
-					case SaveType.BattleAtlas: path = "{AtlasPath}" + AtlasBuilder.battleAtlas + ".png"; break;
-					case SaveType.VehicleMarkerAtlas: path = "{AtlasPath}" + AtlasBuilder.vehicleMarkerAtlas + ".png"; break;
-					case SaveType.CustomAtlas: path = "{AtlasPath}" + AtlasBuilder.customAtlas + ".png"; break;
+					case SaveType.Icons: path = "{IconsPath}\\{TankId}{Ext}"; break;
+					case SaveType.BattleAtlas: path = "{AtlasPath}\\" + AtlasBuilder.battleAtlas + ".png"; break;
+					case SaveType.VehicleMarkerAtlas: path = "{AtlasPath}\\" + AtlasBuilder.vehicleMarkerAtlas + ".png"; break;
+					case SaveType.CustomAtlas: path = "{AtlasPath}\\" + AtlasBuilder.customAtlas + ".png"; break;
 					default: throw new ArgumentOutOfRangeException(nameof(saveType));
 				}
 			}
 
-			path = path.Replace("{IconsPath}", Ut.ExpandPath(context, context.VersionConfig.PathDestination));
-			path = path.Replace("{AtlasPath}", Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas));
-			path = path.Replace("{TimPath}", PathUtil.AppPath);
-			path = path.Replace("{GamePath}", context.Installation.Path);
+			path = path.Replace("{IconsPath}", Ut.ExpandPath(context, context.VersionConfig.PathDestination) + @"\");
+			path = path.Replace("{AtlasPath}", Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas) + @"\");
+			path = path.Replace("{TimPath}", PathUtil.AppPath + @"\");
+			path = path.Replace("{GamePath}", context.Installation.Path + @"\");
 			path = path.Replace("{GameVersion}", context.Installation.GameVersionName);
 
 			if (class_ != null) path = path.Replace("{TankClass}", class_);
@@ -522,12 +516,10 @@ namespace TankIconMaker
 			if (!string.IsNullOrEmpty(shortImageName))
 			{
 				path = path.Replace("{TankId}", shortImageName.ToLowerInvariant());
-				System.Diagnostics.Debug.WriteLine($"DEBUG 3Dv2: USED shortImageName='{shortImageName.ToLowerInvariant()}'");
 			}
 			else
 			{
 				path = path.Replace("{TankId}", tankId);
-				System.Diagnostics.Debug.WriteLine($"DEBUG 3Dv2: USED tankId='{tankId}' (brak shortImageName)");
 			}
 			
 			if (tankFullName != null) path = path.Replace("{TankFullName}", tankFullName);
@@ -538,7 +530,7 @@ namespace TankIconMaker
 			path = path.Replace("{Ext}", context.VersionConfig.TankIconExtension);
 
 			path = Environment.ExpandEnvironmentVariables(path);
-			path = path.Replace('\\', '/').Replace('/', '\\');
+			path = path.Replace(@"\\", @"\").Replace(@"\\", @"\").Replace(@"\\", @"\");
 
 			if (path.EndsWith("\\") && !path.EndsWith(":\\"))
 				path = path.Substring(0, path.Length - 1);
