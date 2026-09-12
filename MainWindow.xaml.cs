@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.IO.Packaging;
@@ -57,10 +57,6 @@ namespace TankIconMaker
             ContentRendered += InitializeEverything;
             Closing += MainWindow_Closing;
         }
-		
-		/// Limit rendering parallelism (Magick.NET, effects, etc.)
-		private static readonly System.Threading.SemaphoreSlim _renderSemaphore =
-			new System.Threading.SemaphoreSlim(12, 24); // parallel renders
 
         /// <summary>
         /// Shows a message in large letters in an overlay in the middle of the window. Must be called on the UI thread
@@ -1038,7 +1034,8 @@ namespace TankIconMaker
                 foreach (var missing in getMissingFonts(style))
                 {
                     lines.Add(App.Translation.Prompt.FontsMissing_StyleLayer.Fmt(style.Name, missing.FontFamily, missing.LayerName));
-                    substitute = missing.Substitute;
+                    if (substitute == null)
+                        substitute = missing.Substitute;
                 }
             if (lines.Count == 0)
                 return true;
@@ -1329,58 +1326,6 @@ namespace TankIconMaker
             }
         }
 		
-		private Task saveIcons3Dv2(string pathTemplate)
-		{
-			var context = CurContext;
-			var style = App.Settings.ActiveStyle; // capture it in case the user selects a different one while the background task is running
-
-			try
-			{
-				var renderTasks = ListRenderTasks(context, style, all: true);
-				var renders = _renderResults.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
-
-				// The rest of the save process occurs off the GUI thread, while this method returns.
-				return Task.Factory.StartNew(() =>
-				{
-					try
-					{
-						foreach (var renderTask in renderTasks)
-							if (!renders.ContainsKey(renderTask.TankId))
-							{
-								renders[renderTask.TankId] = renderTask;
-								renderTask.Render();
-							}
-						foreach (var renderTask in renderTasks)
-						{
-							var render = renders[renderTask.TankId];
-							if (render.Exception == null && !render.isEmpty)
-							{
-								var path = Ut.ExpandIconPath3Dv2(pathTemplate, context, style, renderTask.Tank);
-								path = Ut.GetSafeFilename(path);
-								Directory.CreateDirectory(Path.GetDirectoryName(path));
-								Ut.SaveImage(render.Image, path, context.VersionConfig.TankIconExtension);
-							}
-						}
-					}
-					finally
-					{
-						Dispatcher.Invoke((Action)(() =>
-						{
-							// Cache any new renders that we don't already have
-							foreach (var kvp in renders)
-								if (!_renderResults.ContainsKey(kvp.Key))
-									_renderResults[kvp.Key] = kvp.Value;
-						}));
-					}
-				});
-			}
-			catch (Exception e)
-			{
-				DlgMessage.ShowError(App.Translation.Prompt.IconsSaveError.Fmt(e.Message));
-				return null;
-			}
-		}
-
 		private void bulkSaveIcons(IEnumerable<Style> stylesToSave, string overridePathTemplate = null)
 		{
 			_rendering.Value = true;
@@ -1390,6 +1335,8 @@ namespace TankIconMaker
 			var context = CurContext;
 			var stylesCount = stylesToSave.Count();
 			int tasksRemaining = stylesCount;
+			// Collected quietly and reported once at the end: a message per failed icon would mean hundreds of dialogs
+			var failures = new ConcurrentQueue<string>();
 
 			foreach (var styleF in stylesToSave)
 			{
@@ -1418,11 +1365,9 @@ namespace TankIconMaker
 					{
 						try
 						{
+							renderTask.Render(); // before the path is expanded, because that uses the real 3D image name found while rendering
 							var path = Ut.ExpandIconPath(overrideIconsPath ?? style.PathTemplate, context, style, renderTask.Tank);
-							
 							path = Ut.GetSafeFilename(path);
-							renderTask.Render();
-							
 							if (style.IconsBulkSaveEnabled && !renderTask.isEmpty)
 							{
 								Directory.CreateDirectory(Path.GetDirectoryName(path));
@@ -1431,7 +1376,7 @@ namespace TankIconMaker
 						}
 						catch (Exception ex)
 						{
-							System.Diagnostics.Debug.WriteLine($"Bulk save error: {ex.Message}");
+							failures.Enqueue("{0} ({1}): {2}: {3}".Fmt(style.Name, style.Author, renderTask.TankId, ex.Message));
 						}
 					});
 				}
@@ -1447,6 +1392,8 @@ namespace TankIconMaker
 					var atlasPath = Ut.ExpandPath(context, context.VersionConfig.PathDestinationAtlas);
 					var localAtlasBuilder = new AtlasBuilder(context);
 
+					try
+					{
 					if (style.BattleAtlasBulkSaveEnabled)
 					{
 						var path = Ut.ExpandIconPath(
@@ -1477,6 +1424,12 @@ namespace TankIconMaker
 						localAtlasBuilder.SaveAtlas(path, SaveType.CustomAtlas, renderTasks);
 					}
 
+					}
+					catch (Exception ex)
+					{
+						failures.Enqueue("{0} ({1}): {2}".Fmt(style.Name, style.Author, ex.Message));
+					}
+
 					Interlocked.Decrement(ref tasksRemaining);
 					if ((DateTime.UtcNow - lastGuiUpdate).TotalMilliseconds > 50)
 					{
@@ -1496,8 +1449,25 @@ namespace TankIconMaker
 					_rendering.Value = false;
 					GlobalStatusHide();
 					GC.Collect();
+					reportBulkSaveFailures(failures);
 				}));
 			});
+		}
+
+		/// <summary>
+		///     Reports everything that failed during a bulk save in a single message, never one per icon, and writes the full
+		///     list to a file next to the program.
+		/// </summary>
+		private void reportBulkSaveFailures(ConcurrentQueue<string> failures)
+		{
+			var all = failures.ToArray();
+			if (all.Length == 0)
+				return;
+			string logPath = PathUtil.AppPathCombine("BulkSaveErrors.txt");
+			try { File.WriteAllLines(logPath, all); }
+			catch { logPath = null; }
+			DlgMessage.ShowWarning(App.Translation.Prompt.BulkSave_Failures.Fmt(all.Length, string.Join("\n", all.Take(10)))
+				+ (logPath == null ? "" : "\n\n" + logPath));
 		}
 		
          private void ctSave_Click(object _, RoutedEventArgs __)
@@ -1513,17 +1483,9 @@ namespace TankIconMaker
                 vehicleMarkersAtlas = "-",
                 customAtlas = "-";
 
-            var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
-            var is3Dv2 =
-                tankImageLayer != null &&
-                (tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
-                 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
-
             if (App.Settings.ActiveStyle.IconsBulkSaveEnabled)
             {
-                var iconsTask = is3Dv2
-                    ? saveIcons3Dv2(App.Settings.ActiveStyle.PathTemplate)
-                    : saveIcons(App.Settings.ActiveStyle.PathTemplate);
+                var iconsTask = saveIcons(App.Settings.ActiveStyle.PathTemplate);
 
                 savingTasks.Add(iconsTask);
                 iconsPath = Ut.ExpandIconPath(App.Settings.ActiveStyle.PathTemplate, CurContext, style, null, null);
@@ -1605,13 +1567,7 @@ namespace TankIconMaker
             GlobalStatusShow(App.Translation.Misc.GlobalStatus_Saving);
             var style = App.Settings.ActiveStyle;
 
-            var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
-            var is3Dv2 =
-                tankImageLayer != null &&
-                (tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
-                 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
-
-            Task iconsTask = is3Dv2 ? saveIcons3Dv2("") : saveIcons("");
+            Task iconsTask = saveIcons("");
 
             var savingTasks = new Task[]
             {
@@ -1684,13 +1640,7 @@ namespace TankIconMaker
 
             var pathTemplate = Ut.AppendExpandableFilename(App.Settings.SaveToFolderPath, SaveType.Icons);
 
-            var tankImageLayer = style.Layers.OfType<TankImageLayer>().FirstOrDefault();
-            var is3Dv2 =
-                tankImageLayer != null &&
-                (tankImageLayer.Style == ImageBuiltInStyle.ThreeDv2 ||
-                 tankImageLayer.Style == ImageBuiltInStyle.ThreeDLargev2);
-
-            Task task = is3Dv2 ? saveIcons3Dv2(pathTemplate) : saveIcons(pathTemplate);
+            Task task = saveIcons(pathTemplate);
             if (task == null)
             {
                 GlobalStatusHide();
@@ -1930,7 +1880,7 @@ namespace TankIconMaker
 			var allStyles = App.Settings.Styles
 				.Select(style => {
 					var path = overridePathTemplate ?? style.PathTemplate;
-					var expandedPath = Ut.ExpandIconPath(path, context, style, null);
+					var expandedPath = Ut.ExpandIconPath(path, context, style, null, null);
 						
 					return new CheckListItem<Style>
 					{
@@ -2596,9 +2546,9 @@ namespace TankIconMaker
 
             var tr = App.Translation.Prompt;
             var stylesToExport = CheckListWindow.ShowCheckList(this, allStyles, tr.StyleExport_Prompt, tr.StyleExport_Yes, new string[] { tr.BulkStyles_ColumnTitle }).ToHashSet();
-            if (!confirmMissingFonts(stylesToExport))
-                return;
             if (stylesToExport.Count == 0)
+                return;
+            if (!confirmMissingFonts(stylesToExport))
                 return;
             else if (stylesToExport.Count == 1)
             {

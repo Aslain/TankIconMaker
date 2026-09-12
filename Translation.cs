@@ -992,6 +992,7 @@ namespace TankIconMaker
         public TrString BulkSave_Prompt = "You are about to save tank icons for multiple styles. Any existing icons will be overwritten without further confirmation!\n\nSelect styles you wish to save the icons for:";
         public TrString BulkSave_Yes = "_Save";
         public TrString BulkSave_Progress = "Saving icons...";
+        public TrString BulkSave_Failures = "{0} icon(s) could not be saved:\n\n{1}";
     }
 
     [LingoStringClass, LingoInGroup(TranslationGroup.DlgMessage)]
