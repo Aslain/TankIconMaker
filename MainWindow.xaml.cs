@@ -668,6 +668,8 @@ namespace TankIconMaker
             var img = new TankImageControl
             {
                 SnapsToDevicePixels = true,
+                // Without this the icon lands between screen pixels at a Windows scaling of 125% and the preview looks distorted
+                UseLayoutRounding = true,
                 Margin = new Thickness { Right = 15 },
                 Cursor = Cursors.Hand,
                 Opacity = 0.7,
