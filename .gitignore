@@ -8,5 +8,5 @@ packages
 *.orig
 README.TXT
 *.vsidx
-.vs/TankIconMaker/v18/DocumentLayout.json
-.vs/TankIconMaker/v18/DocumentLayout.backup.json
+.vs/
+nuget.exe
